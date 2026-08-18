@@ -1767,6 +1767,665 @@ Returns task_id for tracking progress with tasks_get.
 		},
 		Handler: r.handleTasksGet,
 	}
+
+	// === User management ===
+	r.tools["query_users"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_users",
+			Description: "Query TrueNAS local users with optional filtering by username or uid. Returns simplified user info (no ssh key bodies, only fingerprints).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username": map[string]interface{}{"type": "string", "description": "Filter by username (partial match)"},
+					"uid":      map[string]interface{}{"type": "number", "description": "Filter by uid"},
+					"order_by": map[string]interface{}{"type": "string", "description": "Sort field (default: username)"},
+					"limit":    map[string]interface{}{"type": "number", "description": "Max results (default: 50)"},
+				},
+			},
+		},
+		Handler: handleQueryUsers,
+	}
+
+	r.tools["get_user"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "get_user",
+			Description: "Get a single TrueNAS user by username or uid. Includes sshpubkey_set flag and fingerprint (never the key body).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username": map[string]interface{}{"type": "string", "description": "Username to look up"},
+					"uid":      map[string]interface{}{"type": "number", "description": "UID to look up"},
+				},
+			},
+		},
+		Handler: handleGetUser,
+	}
+
+	r.tools["create_user"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_user",
+			Description: "Create a local TrueNAS user. Defaults to password_disabled=true (use sync_ssh_key or update_user to set ssh access). Supports dry-run. sshpubkey may be passed directly (public key, not secret) but prefer sync_ssh_key for blind key injection.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username":          map[string]interface{}{"type": "string", "description": "Username (required)"},
+					"full_name":         map[string]interface{}{"type": "string", "description": "Full name (default: username)"},
+					"uid":               map[string]interface{}{"type": "number", "description": "UID (auto-assigned if omitted)"},
+					"group":             map[string]interface{}{"type": "string", "description": "Primary group name"},
+					"gid":               map[string]interface{}{"type": "number", "description": "Primary group GID"},
+					"shell":             map[string]interface{}{"type": "string", "description": "Login shell (e.g. /usr/bin/bash, /usr/sbin/nologin)"},
+					"home":              map[string]interface{}{"type": "string", "description": "Home directory"},
+					"email":             map[string]interface{}{"type": "string", "description": "Email address"},
+					"smb":               map[string]interface{}{"type": "boolean", "description": "SMB access"},
+					"locked":            map[string]interface{}{"type": "boolean", "description": "Lock account"},
+					"password_disabled": map[string]interface{}{"type": "boolean", "description": "Disable password login (default: true)"},
+					"password":          map[string]interface{}{"type": "string", "description": "Password (secret - prefer password_disabled + ssh key)"},
+					"sshpubkey":         map[string]interface{}{"type": "string", "description": "SSH public key (public, not secret). Prefer sync_ssh_key for blind injection."},
+					"dry_run":           map[string]interface{}{"type": "boolean", "description": "Preview without executing", "default": false},
+				},
+				"required": []string{"username"},
+			},
+		},
+		Handler: handleCreateUser,
+	}
+
+	r.tools["update_user"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_user",
+			Description: "Update an existing TrueNAS user. Can set sshpubkey, shell, group, etc. Use clear_sshpubkey=true to remove ssh key. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username":             map[string]interface{}{"type": "string", "description": "Username to update (or uid)"},
+					"uid":                  map[string]interface{}{"type": "number", "description": "UID to update (or username)"},
+					"full_name":            map[string]interface{}{"type": "string"},
+					"shell":                map[string]interface{}{"type": "string"},
+					"home":                 map[string]interface{}{"type": "string"},
+					"email":                map[string]interface{}{"type": "string"},
+					"group":                map[string]interface{}{"type": "string"},
+					"uid_new":              map[string]interface{}{"type": "number", "description": "New UID"},
+					"gid":                  map[string]interface{}{"type": "number"},
+					"smb":                  map[string]interface{}{"type": "boolean"},
+					"locked":               map[string]interface{}{"type": "boolean"},
+					"password_disabled":    map[string]interface{}{"type": "boolean"},
+					"ssh_password_enabled": map[string]interface{}{"type": "boolean"},
+					"password":             map[string]interface{}{"type": "string", "description": "New password (secret)"},
+					"sshpubkey":            map[string]interface{}{"type": "string", "description": "SSH public key (public). Prefer sync_ssh_key."},
+					"clear_sshpubkey":      map[string]interface{}{"type": "boolean", "description": "Remove ssh public key"},
+					"dry_run":              map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateUser,
+	}
+
+	r.tools["delete_user"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_user",
+			Description: "Delete a local TrueNAS user. Supports dry-run. WARNING: irreversible.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username":     map[string]interface{}{"type": "string"},
+					"uid":          map[string]interface{}{"type": "number"},
+					"delete_group": map[string]interface{}{"type": "boolean", "description": "Also delete user's private group"},
+					"dry_run":      map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleDeleteUser,
+	}
+
+	// === Group management ===
+	r.tools["query_groups"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_groups",
+			Description: "Query TrueNAS local groups with optional filtering by name or gid.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":     map[string]interface{}{"type": "string", "description": "Filter by name (partial match)"},
+					"gid":      map[string]interface{}{"type": "number"},
+					"order_by": map[string]interface{}{"type": "string"},
+					"limit":    map[string]interface{}{"type": "number"},
+				},
+			},
+		},
+		Handler: handleQueryGroups,
+	}
+
+	r.tools["create_group"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_group",
+			Description: "Create a local TrueNAS group. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":    map[string]interface{}{"type": "string", "description": "Group name (required)"},
+					"gid":     map[string]interface{}{"type": "number", "description": "GID (auto-assigned if omitted)"},
+					"smb":     map[string]interface{}{"type": "boolean"},
+					"users":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Usernames to add"},
+					"dry_run": map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"name"},
+			},
+		},
+		Handler: handleCreateGroup,
+	}
+
+	r.tools["update_group"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_group",
+			Description: "Update a TrueNAS group (name, gid, smb, members). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":     map[string]interface{}{"type": "string", "description": "Current group name (or gid)"},
+					"gid":      map[string]interface{}{"type": "number", "description": "Current GID (or name)"},
+					"new_name": map[string]interface{}{"type": "string", "description": "New name"},
+					"new_gid":  map[string]interface{}{"type": "number", "description": "New GID"},
+					"smb":      map[string]interface{}{"type": "boolean"},
+					"users":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateGroup,
+	}
+
+	r.tools["delete_group"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_group",
+			Description: "Delete a local TrueNAS group. Supports dry-run. WARNING: irreversible.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":         map[string]interface{}{"type": "string"},
+					"gid":          map[string]interface{}{"type": "number"},
+					"delete_users": map[string]interface{}{"type": "boolean", "description": "Also delete users in this group"},
+					"dry_run":      map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleDeleteGroup,
+	}
+
+	// === SSH key sync (blind - agent never sees key material) ===
+	r.tools["sync_ssh_key"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "sync_ssh_key",
+			Description: "Fetch an SSH public key from a blind credential backend (aac, Bitwarden CLI, or file) and write it to a TrueNAS user's sshpubkey. The key material is fetched by truenas-mcp itself and NEVER returned to the calling agent - only a fingerprint is returned. Backends: aac (default, uses AAC_TOKEN env), bw (uses bw CLI + BW_PASSWORD), file (reads from absolute path).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"username": map[string]interface{}{"type": "string", "description": "TrueNAS user to update (required)"},
+					"backend":  map[string]interface{}{"type": "string", "description": "aac (default), bw, or file"},
+					"key_ref":  map[string]interface{}{"type": "string", "description": "Domain (aac), item name/id (bw), or absolute path (file)"},
+					"field":    map[string]interface{}{"type": "string", "description": "Credential field name (default: sshkey)"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"username", "key_ref"},
+			},
+		},
+		Handler: handleSyncSSHKey,
+	}
+
+	// === Services ===
+	r.tools["query_services"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_services",
+			Description: "Query TrueNAS services and their state (enabled, running). Filter by service name.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service":  map[string]interface{}{"type": "string", "description": "Filter by service name (e.g. ssh, smb, nfs)"},
+					"order_by": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		Handler: handleQueryServices,
+	}
+
+	r.tools["control_service"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "control_service",
+			Description: "Start, stop, restart, or reload a TrueNAS service. Critical: SSH service must be running for ssh-key-based logins to work. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service": map[string]interface{}{"type": "string", "description": "Service name (ssh, smb, nfs, afp, iscsi, etc.)"},
+					"action":  map[string]interface{}{"type": "string", "description": "start, stop, restart, or reload"},
+					"dry_run": map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"service", "action"},
+			},
+		},
+		Handler: handleControlService,
+	}
+
+	// === Share lifecycle (delete + update) ===
+	r.tools["delete_smb_share"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_smb_share",
+			Description: "Delete an SMB share by id or name. Supports dry-run. Does NOT delete the underlying dataset.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"share_id": map[string]interface{}{"type": "number"},
+					"name":     map[string]interface{}{"type": "string"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleDeleteSMBShare,
+	}
+
+	r.tools["update_smb_share"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_smb_share",
+			Description: "Update an SMB share (comment, path, enabled, ro, browsable, guestok, etc.). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"share_id":   map[string]interface{}{"type": "number"},
+					"name":       map[string]interface{}{"type": "string"},
+					"comment":    map[string]interface{}{"type": "string"},
+					"path":       map[string]interface{}{"type": "string"},
+					"enabled":    map[string]interface{}{"type": "boolean"},
+					"ro":         map[string]interface{}{"type": "boolean"},
+					"browsable":  map[string]interface{}{"type": "boolean"},
+					"guestok":    map[string]interface{}{"type": "boolean"},
+					"abe":        map[string]interface{}{"type": "boolean"},
+					"home":       map[string]interface{}{"type": "string"},
+					"purpose":    map[string]interface{}{"type": "string"},
+					"auxsmbconf": map[string]interface{}{"type": "string"},
+					"dry_run":    map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateSMBShare,
+	}
+
+	r.tools["delete_nfs_share"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_nfs_share",
+			Description: "Delete an NFS share by id or path. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"share_id": map[string]interface{}{"type": "number"},
+					"path":     map[string]interface{}{"type": "string"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleDeleteNFSShare,
+	}
+
+	r.tools["update_nfs_share"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_nfs_share",
+			Description: "Update an NFS share (networks, hosts, ro, maproot, mapall, security). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"share_id":      map[string]interface{}{"type": "number"},
+					"path":          map[string]interface{}{"type": "string"},
+					"comment":       map[string]interface{}{"type": "string"},
+					"enabled":       map[string]interface{}{"type": "boolean"},
+					"ro":            map[string]interface{}{"type": "boolean"},
+					"networks":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"hosts":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"security":      map[string]interface{}{"type": "string"},
+					"maproot_user":  map[string]interface{}{"type": "string"},
+					"maproot_group": map[string]interface{}{"type": "string"},
+					"mapall_user":   map[string]interface{}{"type": "string"},
+					"mapall_group":  map[string]interface{}{"type": "string"},
+					"dry_run":       map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateNFSShare,
+	}
+
+	// === Snapshots ===
+	r.tools["create_snapshot"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_snapshot",
+			Description: "Create a ZFS snapshot of a dataset. Supports recursive snapshots and retention policy. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dataset":     map[string]interface{}{"type": "string", "description": "Dataset path (e.g. tank/data)"},
+					"name":        map[string]interface{}{"type": "string", "description": "Snapshot name (auto-generated if empty)"},
+					"recursive":   map[string]interface{}{"type": "boolean"},
+					"vmware_sync": map[string]interface{}{"type": "boolean"},
+					"retain_days": map[string]interface{}{"type": "number", "description": "Retention period in days"},
+					"dry_run":     map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"dataset"},
+			},
+		},
+		Handler: handleCreateSnapshot,
+	}
+
+	r.tools["delete_snapshot"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_snapshot",
+			Description: "Delete a ZFS snapshot. Supports recursive delete. Supports dry-run. WARNING: irreversible.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"snapshot":  map[string]interface{}{"type": "string", "description": "Full snapshot name (e.g. tank/data@snap)"},
+					"recursive": map[string]interface{}{"type": "boolean"},
+					"defer":     map[string]interface{}{"type": "boolean"},
+					"dry_run":   map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"snapshot"},
+			},
+		},
+		Handler: handleDeleteSnapshot,
+	}
+
+	r.tools["rollback_snapshot"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "rollback_snapshot",
+			Description: "Rollback a dataset to a snapshot. WARNING: discards all data created AFTER the snapshot. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"snapshot": map[string]interface{}{"type": "string", "description": "Full snapshot name (e.g. tank/data@snap)"},
+					"force":    map[string]interface{}{"type": "boolean"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"snapshot"},
+			},
+		},
+		Handler: handleRollbackSnapshot,
+	}
+
+	// === VM control ===
+	r.tools["start_vm"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "start_vm",
+			Description: "Start a TrueNAS VM by id or name. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"vm_id":   map[string]interface{}{"type": "number"},
+					"name":    map[string]interface{}{"type": "string"},
+					"dry_run": map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleStartVM,
+	}
+
+	r.tools["stop_vm"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "stop_vm",
+			Description: "Stop a TrueNAS VM. Use force=true for force stop. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"vm_id":   map[string]interface{}{"type": "number"},
+					"name":    map[string]interface{}{"type": "string"},
+					"force":   map[string]interface{}{"type": "boolean"},
+					"dry_run": map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleStopVM,
+	}
+
+	r.tools["delete_vm"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "delete_vm",
+			Description: "Delete a TrueNAS VM. Optionally remove associated zvols. Supports dry-run. WARNING: irreversible.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"vm_id":        map[string]interface{}{"type": "number"},
+					"name":         map[string]interface{}{"type": "string"},
+					"remove_zvols": map[string]interface{}{"type": "boolean"},
+					"dry_run":      map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleDeleteVM,
+	}
+
+	// === Network ===
+	r.tools["query_network_interfaces"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_network_interfaces",
+			Description: "Query TrueNAS network interfaces with addresses, state, and MTU.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		Handler: handleQueryNetworkInterfaces,
+	}
+
+	r.tools["update_network_interface"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_network_interface",
+			Description: "Update a network interface (mtu, enabled, addresses, boot_priority). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"iface_id":      map[string]interface{}{"type": "number"},
+					"name":          map[string]interface{}{"type": "string"},
+					"mtu":           map[string]interface{}{"type": "number"},
+					"enabled":       map[string]interface{}{"type": "boolean"},
+					"addresses":     map[string]interface{}{"type": "array"},
+					"boot_priority": map[string]interface{}{"type": "number"},
+					"dry_run":       map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateNetworkInterface,
+	}
+
+	// === ACL ===
+	r.tools["get_acl"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "get_acl",
+			Description: "Get the ACL on a path (dataset or directory).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path":      map[string]interface{}{"type": "string", "description": "Path (e.g. /mnt/tank/data)"},
+					"dacl_path": map[string]interface{}{"type": "string"},
+				},
+				"required": []string{"path"},
+			},
+		},
+		Handler: handleGetACL,
+	}
+
+	r.tools["set_acl"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "set_acl",
+			Description: "Set ACL on a path. Use to grant new users access to datasets. Supports POSIX and NFSv4 ACLs. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path":     map[string]interface{}{"type": "string", "description": "Path (e.g. /mnt/tank/data)"},
+					"acl":      map[string]interface{}{"type": "array", "description": "Array of ACL entries"},
+					"acl_type": map[string]interface{}{"type": "string", "description": "POSIX or NFSV4 (default: NFSV4)"},
+					"options":  map[string]interface{}{"type": "object", "description": "Options (recursive, traverse, etc.)"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"path", "acl"},
+			},
+		},
+		Handler: handleSetACL,
+	}
+
+	// === API keys ===
+	r.tools["query_api_keys"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_api_keys",
+			Description: "List TrueNAS API keys (id, name, username, created_at). Key values are NEVER returned.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		Handler: handleQueryAPIKeys,
+	}
+
+	r.tools["create_api_key"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_api_key",
+			Description: "Create a TrueNAS API key. The key VALUE is REDACTED from the agent response - retrieve it from TrueNAS Web UI or a secure script. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":     map[string]interface{}{"type": "string", "description": "Key name (required)"},
+					"username": map[string]interface{}{"type": "string", "description": "Owner username (default: devin-mcp)"},
+					"dry_run":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"name"},
+			},
+		},
+		Handler: handleCreateAPIKey,
+	}
+
+	r.tools["revoke_api_key"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "revoke_api_key",
+			Description: "Revoke (delete) a TrueNAS API key by id or name. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"key_id":  map[string]interface{}{"type": "number"},
+					"name":    map[string]interface{}{"type": "string"},
+					"dry_run": map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleRevokeAPIKey,
+	}
+
+	// === Replication ===
+	r.tools["query_replication_tasks"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_replication_tasks",
+			Description: "Query ZFS replication tasks with state and schedule.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":     map[string]interface{}{"type": "string"},
+					"order_by": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		Handler: handleQueryReplicationTasks,
+	}
+
+	r.tools["create_replication_task"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_replication_task",
+			Description: "Create a ZFS replication task (PUSH/PULL over SSH/LOCAL). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":            map[string]interface{}{"type": "string"},
+					"source_dataset":  map[string]interface{}{"type": "string"},
+					"target_dataset":  map[string]interface{}{"type": "string"},
+					"direction":       map[string]interface{}{"type": "string", "description": "PUSH or PULL (default: PUSH)"},
+					"transport":       map[string]interface{}{"type": "string", "description": "SSH or LOCAL (default: SSH)"},
+					"ssh_credentials": map[string]interface{}{"type": "number"},
+					"recursive":       map[string]interface{}{"type": "boolean"},
+					"autosnap":        map[string]interface{}{"type": "boolean"},
+					"naming_schema":   map[string]interface{}{"type": "string"},
+					"schedule":        map[string]interface{}{"type": "object"},
+					"dry_run":         map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"name", "source_dataset", "target_dataset"},
+			},
+		},
+		Handler: handleCreateReplicationTask,
+	}
+
+	// === Cloud sync ===
+	r.tools["query_cloud_sync"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "query_cloud_sync",
+			Description: "Query cloud sync tasks (S3, etc.) with state.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":     map[string]interface{}{"type": "string"},
+					"order_by": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		Handler: handleQueryCloudSync,
+	}
+
+	r.tools["create_cloud_sync_task"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "create_cloud_sync_task",
+			Description: "Create a cloud sync task (PUSH/PULL to S3, etc.). Requires pre-configured credential provider. Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"description":         map[string]interface{}{"type": "string"},
+					"direction":           map[string]interface{}{"type": "string", "description": "PUSH or PULL"},
+					"transfer_mode":       map[string]interface{}{"type": "string", "description": "SYNC, COPY, MOVE (default: SYNC)"},
+					"credentials":         map[string]interface{}{"type": "number", "description": "Credential provider id"},
+					"path":                map[string]interface{}{"type": "string"},
+					"schedule":            map[string]interface{}{"type": "object"},
+					"encryption":          map[string]interface{}{"type": "boolean"},
+					"filename_encryption": map[string]interface{}{"type": "boolean"},
+					"args":                map[string]interface{}{"type": "array"},
+					"dry_run":             map[string]interface{}{"type": "boolean", "default": false},
+				},
+				"required": []string{"description", "direction", "credentials", "path"},
+			},
+		},
+		Handler: handleCreateCloudSync,
+	}
+
+	// === System config ===
+	r.tools["get_system_config"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "get_system_config",
+			Description: "Get TrueNAS system config (timezone, hostname, gateway, DNS, etc.). Credential fields redacted.",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		Handler: handleGetSystemConfig,
+	}
+
+	r.tools["update_system_config"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "update_system_config",
+			Description: "Update TrueNAS system config (timezone, hostname, gateway, DNS, proxy). Supports dry-run.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"timezone":    map[string]interface{}{"type": "string"},
+					"language":    map[string]interface{}{"type": "string"},
+					"hostname":    map[string]interface{}{"type": "string"},
+					"domain":      map[string]interface{}{"type": "string"},
+					"gateway":     map[string]interface{}{"type": "string"},
+					"nameserver1": map[string]interface{}{"type": "string"},
+					"nameserver2": map[string]interface{}{"type": "string"},
+					"http_proxy":  map[string]interface{}{"type": "string"},
+					"https_proxy": map[string]interface{}{"type": "string"},
+					"dry_run":     map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+		Handler: handleUpdateSystemConfig,
+	}
 }
 
 func (r *Registry) ListTools() []mcp.Tool {
