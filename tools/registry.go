@@ -2003,6 +2003,24 @@ Returns task_id for tracking progress with tasks_get.
 		Handler: handleControlService,
 	}
 
+	// === Shell (read-only diagnostics over SSH) ===
+	r.tools["run_readonly_command"] = Tool{
+		Definition: mcp.Tool{
+			Name: "run_readonly_command",
+			Description: "Run a read-only diagnostic shell command on the TrueNAS host over SSH (e.g. 'docker ps', 'zpool status', 'cat /etc/version', 'midclt call app.query'). " +
+				"Strictly allowlisted: no pipes, redirects, chaining, substitution, or mutating commands. " +
+				"Requires TRUENAS_SSH_TARGET and TRUENAS_SSH_KEY env vars. The SSH account on TrueNAS should use the ro-shell.sh forced-command wrapper (deploy/ dir) for server-side enforcement.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"command": map[string]interface{}{"type": "string", "description": "Single read-only command to run (allowlisted). No pipes, redirects, or chaining."},
+				},
+				"required": []string{"command"},
+			},
+		},
+		Handler: handleRunReadonlyCommand,
+	}
+
 	// === Share lifecycle (delete + update) ===
 	r.tools["delete_smb_share"] = Tool{
 		Definition: mcp.Tool{
