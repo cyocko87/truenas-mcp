@@ -60,17 +60,17 @@ var shellMutatingWords = regexp.MustCompile(`(?i)\b(` +
 // shellDangerousFlags rejects risky flags on commands whose subcommand-based
 // allowlist patterns cannot fully constrain them.
 var shellDangerousFlags = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bdmesg\s+.*(--clear|--console|-\w*[cCnEDr]\w*)`),                                                                // -c/-C clear buffer, -D/-E disable/enable logging
-	regexp.MustCompile(`(?i)\bjournalctl\b.*\s-\w*f\b`),                                                                                      // -f follows forever
-	regexp.MustCompile(`(?i)\bjournalctl\b.*--(vacuum|rotate|flush|sync|header|update-catalog)[\w=-]*`),                                      // mutating long flags
-	regexp.MustCompile(`(?i)\bsmartctl\s+.*(-\w*[tso]\w*|--test|--set|--identify)`),                                                          // -t starts tests, -s toggles, -o offline
-	regexp.MustCompile(`(?i)\bfuser\s+.*-\w*k\b`),                                                                                            // -k kills processes
-	regexp.MustCompile(`(?i)\bss\s+.*-\w*K\b`),                                                                                               // -K forcibly closes sockets
-	regexp.MustCompile(`(?i)\brpcinfo\s+.*-\w*[db]\w*`),                                                                                      // -d/-b broadcast/de-register
-	regexp.MustCompile(`(?i)\btail\s+.*-\w*f\b`),                                                                                             // tail -f hangs
-	regexp.MustCompile(`(?i)\bdocker\s+(logs|events)\s+.*-\w*f\b`),                                                                           // docker logs -f / events hang
-	regexp.MustCompile(`(?i)\bzpool\s+events\s+.*-v\b`),                                                                                      // zpool events -v follows
-	regexp.MustCompile(`(?i)\bmidclt\s+call\s+\S+\.(create|update|delete|do_|set_|start|stop|restart|destroy|attach|detach|remove|add|set)`), // defense-in-depth for midclt
+	regexp.MustCompile(`(?i)\bdmesg\s+.*(--clear|--console|-\w*[cCnEDr]\w*)`),                           // -c/-C clear buffer, -D/-E disable/enable logging
+	regexp.MustCompile(`(?i)\bjournalctl\b.*\s-\w*f\b`),                                                 // -f follows forever
+	regexp.MustCompile(`(?i)\bjournalctl\b.*--(vacuum|rotate|flush|sync|header|update-catalog)[\w=-]*`), // mutating long flags
+	regexp.MustCompile(`(?i)\bsmartctl\s+.*(-\w*[tso]\w*|--test|--set|--identify)`),                     // -t starts tests, -s toggles, -o offline
+	regexp.MustCompile(`(?i)\bfuser\s+.*-\w*k\b`),                                                       // -k kills processes
+	regexp.MustCompile(`(?i)\bss\s+.*-\w*K\b`),                                                          // -K forcibly closes sockets
+	regexp.MustCompile(`(?i)\brpcinfo\s+.*-\w*[db]\w*`),                                                 // -d/-b broadcast/de-register
+	regexp.MustCompile(`(?i)\btail\s+.*-\w*f\b`),                                                        // tail -f hangs
+	regexp.MustCompile(`(?i)\bdocker\s+(logs|events)\s+.*-\w*f\b`),                                      // docker logs -f / events hang
+	regexp.MustCompile(`(?i)\bzpool\s+events\s+.*-v\b`),                                                 // zpool events -v follows
+
 }
 
 // shellAllowlist: broad read-only diagnostics. Every pattern is anchored.
@@ -116,12 +116,6 @@ var shellAllowlist = []*regexp.Regexp{
 	regexp.MustCompile(`^(nslookup|dig|host|whois)(\s+[\w\-:./=@,+]+)*\s*$`),
 	regexp.MustCompile(`^(ping|ping6|traceroute|traceroute6|tracepath|mtr\s+--report|arping)\s+(-\w+\s+)*[\w\-:./]+(\s+[\w\-:./=@,+]+)*\s*$`),
 	regexp.MustCompile(`^curl\s+(-[sSI]|-sI|-s\s+-I)\s+[\w\-:./?=&%+]+\s*$`),
-
-	// midclt read-only API calls: method must end in a known read suffix or be
-	// an explicitly-safe method. (JSON args with []{} are blocked by the
-	// metachar denylist; use argument-free calls or simple strings.)
-	regexp.MustCompile(`^midclt\s+call\s+[a-zA-Z0-9_]+\.([a-zA-Z0-9_]+\.)*(query|config|get_instance|status|info|version|ready|choices|stats|logs|verbose|summary|capacity|targets|sessions)\b[\w\s\-:./=@,'"]*$`),
-	regexp.MustCompile(`^midclt\s+call\s+(core\.ping|core\.arp|core\.get_methods|core\.get_services|system\.info|system\.version|system\.product_name|system\.is_freenas|system\.is_ix_hardware|system\.boot_id|system\.ready|system\.state|failover\.licensed|failover\.status|interface\.has_pending_changes|dns\.query|boot\.get_state|pool\.dataset\.encryption_summary)\b[\w\s\-:./=@,'"]*$`),
 
 	// sharing / service state
 	regexp.MustCompile(`^(smbstatus|nfsstat|nfsiostat|exportfs\s+-s|exportfs\s+-v|showmount\s+-e|rpcinfo\s+-p|iscsiadm\s+-m\s+(session|discoverydb|iface|node)\b)(\s+[\w\-:./=@,+]+)*\s*$`),

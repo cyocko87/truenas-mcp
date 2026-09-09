@@ -55,10 +55,6 @@ fi
 if echo "$CMD" | grep -qiE '(fuser +.*-[a-zA-Z]*k\b|ss +.*-[a-zA-Z]*K\b|tail +.*-[a-zA-Z]*f\b|docker +(logs|events) +.*-[a-zA-Z]*f\b|rpcinfo +.*-[a-zA-Z]*[db])'; then
     echo "ro-shell: denied (dangerous flag)" >&2; $LOG "denied(flag): $CMD"; exit 1
 fi
-if echo "$CMD" | grep -qiE 'midclt +call +[a-zA-Z0-9_.]+\.(create|update|delete|do_|set_|start|stop|restart|destroy|attach|detach|remove|add|set)'; then
-    echo "ro-shell: denied (midclt mutating method)" >&2; $LOG "denied(midclt): $CMD"; exit 1
-fi
-
 # 4. Allowlist: first word (+ subcommand where relevant) must be read-only.
 ALLOWED=0
 case "$CMD" in
@@ -184,7 +180,6 @@ case "$CMD" in
     "nslookup "*|"dig "*|"host "*|"whois "*|\
     "ping "*|"ping6 "*|"traceroute "*|"tracepath "*|"arping "*|\
     "curl -sI"*|"curl -s -I"*|\
-    "midclt call "*|\
     "smbstatus"*|"nfsstat"*|"nfsiostat"*|\
     "exportfs -s"*|"exportfs -v"*|\
     "showmount -e"*|"rpcinfo -p"*|\
@@ -201,21 +196,7 @@ case "$CMD" in
         ;;
 esac
 
-# midclt: method must end in a read suffix or be explicitly safe.
-if [ "$ALLOWED" -eq 1 ]; then
-    case "$CMD" in
-        "midclt call "*)
-            METHOD=$(echo "$CMD" | awk '{print $3}')
-            case "$METHOD" in
-                *.query|*.config|*.get_instance|*.status|*.info|*.version|*.ready|*.choices|*.stats|*.logs|*.summary|*.capacity|*.targets|*.sessions|\
-                core.ping|core.arp|core.get_methods|core.get_services|system.info|system.version|system.product_name|system.is_freenas|system.is_ix_hardware|system.boot_id|system.ready|system.state|failover.licensed|failover.status|interface.has_pending_changes|dns.query|boot.get_state|pool.dataset.encryption_summary)
-                    : ;;
-                *)
-                    ALLOWED=0 ;;
-            esac
-            ;;
-    esac
-fi
+
 
 if [ "$ALLOWED" -ne 1 ]; then
     echo "ro-shell: denied (not allowlisted)" >&2
