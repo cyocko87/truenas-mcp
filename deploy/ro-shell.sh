@@ -224,4 +224,4 @@ if [ "$ALLOWED" -ne 1 ]; then
 fi
 
 $LOG "allowed: $CMD"
-exec /bin/sh -c "exec $CMD"
+exec /bin/sh -c "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; exec $CMD"

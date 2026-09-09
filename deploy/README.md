@@ -4,80 +4,94 @@
 Enforcement is two-layered:
 
 1. **Client-side**: `tools/shell.go` rejects anything not matching a strict
-   read-only allowlist (no pipes, redirects, chaining, substitution, globbing,
-   or mutating commands).
+   read-only allowlist (no pipes, redirects, chaining, substitution, or
+   mutating commands).
 2. **Server-side**: `ro-shell.sh` (this directory) re-validates
    `$SSH_ORIGINAL_COMMAND` on the NAS. Even if the MCP tool is bypassed, the
    NAS rejects non-allowlisted commands.
 
 ## One-time setup
 
-### 1. Install the wrapper on TrueNAS
+This guide uses datasets on the `apps` pool (`/mnt/apps/utils/mcp`) so the
+wrapper and home directory survive reboots. Adjust the pool name if needed.
 
-The TrueNAS API cannot write arbitrary files, so this is a single manual step.
-In the TrueNAS UI (System > Shell) run:
+### 1. Create datasets and install the wrapper
+
+In the TrueNAS UI → System → Shell, run:
 
 ```sh
-cat > /usr/local/bin/ro-shell.sh <<'EOF'
-# <paste contents of deploy/ro-shell.sh>
+midclt call pool.dataset.create '{"name": "apps/utils/mcp", "type": "FILESYSTEM", "share_type": "APPS"}'
+midclt call pool.dataset.create '{"name": "apps/utils/mcp/home", "type": "FILESYSTEM", "share_type": "APPS"}'
+
+mkdir -p /mnt/apps/utils/mcp/home/.ssh
+cat > /mnt/apps/utils/mcp/ro-shell.sh <<'EOF'
+# <paste the full contents of deploy/ro-shell.sh from this repo>
 EOF
-chmod 755 /usr/local/bin/ro-shell.sh
+chmod 755 /mnt/apps/utils/mcp/ro-shell.sh
 ```
 
-Or copy the file via SCP/SSH if the SSH service is already enabled.
+### 2. Create the read-only user
 
-### 2. Create a dedicated read-only user
+Use an admin API key or the TrueNAS UI:
 
-Via the MCP `create_user` tool, or the UI:
+- **Username:** `mcp-ro`
+- **Full name:** `MCP read-only`
+- **Home:** `/mnt/apps/utils/mcp/home`
+- **Home create:** off (it is already a dataset)
+- **Shell:** `nologin`
+- **Password disabled**
+- **SSH public key:** paste the contents of `C:\Users\jakey\.ssh\truenas_mcp_ro.pub`
+  (the private key must have no passphrase; the key must be a single unquoted
+  public-key line, no `command=` prefix — the forced command is applied by sshd
+  instead).
 
-- Username: `mcp-ro`
-- password_disabled: true (key-only auth)
-- Home: `/nonexistent` (or `/var/empty`)
-- Groups: add `docker` if `docker *` commands are needed. Without it, docker
-  commands will be rejected by the OS (docker socket is root/docker-group).
-  Note: docker group is effectively root-equivalent on the host — decide
-  whether the convenience is worth it; everything else works unprivileged.
-- Shell: try `/usr/local/bin/ro-shell.sh`. If the API/UI rejects a shell not
-  in `user.shell_choices`, instead set the SSH public key (next step) with a
-  forced-command prefix — see 3b below. (Or use sshd `Match` block, 3c.)
+Then set ownership and permissions:
 
-### 3. Authorize the MCP key with a forced command
-
-Generate a dedicated keypair on the MCP host:
-
-```powershell
-ssh-keygen -t ed25519 -f C:\Users\jakey\.ssh\truenas_mcp_ro -N '""'
+```sh
+chown -R mcp-ro:mcp-ro /mnt/apps/utils/mcp/home
+chmod 755 /mnt/apps/utils/mcp/home
+chmod 700 /mnt/apps/utils/mcp/home/.ssh
+chmod 600 /mnt/apps/utils/mcp/home/.ssh/authorized_keys
 ```
 
-Then push the public key to the `mcp-ro` user (the existing `sync_ssh_key`
-tool can do this blindly with backend `file` and key_ref pointing at the
-`.pub` file). Three ways to bind the wrapper, in order of preference:
+If the user creation UI overwrote `authorized_keys`, re-run the `chmod` and make
+sure `sshpubkey` is set to the plain public key.
 
-a) **Login shell**: set user `shell` = `/usr/local/bin/ro-shell.sh`
-   (SSH_ORIGINAL_COMMAND is still set for non-interactive `ssh user@host cmd`).
+### 3. Force the wrapper via sshd `Match` block
 
-b) **Forced command in authorized_keys**: if the `sshpubkey` field accepts a
-   full authorized_keys line, use:
-   `command="/usr/local/bin/ro-shell.sh",no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 AAAA...`
+In the TrueNAS UI: **Services > SSH > Auxiliary Parameters**, or via
+`midclt` with `ssh.update`:
 
-c) **sshd Match block**: Services > SSH > Auxiliary Parameters:
-   ```
-   Match User mcp-ro
-       ForceCommand /usr/local/bin/ro-shell.sh
-       AllowAgentForwarding no
-       AllowTcpForwarding no
-       X11Forwarding no
-   ```
+```sh
+cat > /tmp/ssh_options.json <<'EOF'
+{"options": "Match User mcp-ro\n    ForceCommand /mnt/apps/utils/mcp/ro-shell.sh\n    AllowAgentForwarding no\n    AllowTcpForwarding no\n    X11Forwarding no\n    PasswordAuthentication no\n"}
+EOF
+midclt call ssh.update "$(cat /tmp/ssh_options.json)"
+midclt call service.restart ssh
+```
 
-Whichever path is used, the key alone must not grant a real shell.
+The `ForceCommand` runs through the user's login shell, so `nologin` would
+prevent it. Leave the user's shell as a valid shell if you are not using the
+`Match` block, or keep `nologin` and rely on `Match` `ForceCommand` with the
+understanding that `nologin` would still break the wrapper.
 
 ### 4. Enable/start SSH
 
 `control_service` tool: `service=ssh`, `action=start`, then enable it to run
-at boot (UI: System > Services). Optionally restrict SSH to LAN via TrueNAS
-interface binding or OPNsense firewall rules.
+at boot (UI: System > Services). Optionally restrict SSH to LAN via OPNsense
+firewall rules.
 
-### 5. Configure the MCP
+### 5. Grant read-only Docker access (optional)
+
+`mcp-ro` cannot be added to the protected `docker` group. Grant it ACL access
+to the Docker socket. This is not persistent across Docker restarts or reboots
+unless added to an Init/Shutdown script:
+
+```sh
+setfacl -m u:mcp-ro:rw /var/run/docker.sock
+```
+
+### 6. Configure the MCP
 
 Add env vars to the truenas MCP entry in `mcp_config.json`:
 
@@ -89,10 +103,12 @@ Add env vars to the truenas MCP entry in `mcp_config.json`:
 }
 ```
 
-### 6. Verify
+### 7. Verify
 
 ```
-run_readonly_command: "docker ps"          -> succeeds
+run_readonly_command: "uptime"             -> succeeds
+run_readonly_command: "docker ps"          -> succeeds (after setfacl)
+run_readonly_command: "zpool status"       -> succeeds
 run_readonly_command: "docker stop x"      -> rejected client-side
 run_readonly_command: "cat /etc/passwd; id" -> rejected client-side
 ssh -i <key> mcp-ro@host "reboot"          -> rejected server-side (ro-shell)
@@ -102,7 +118,7 @@ ssh -i <key> mcp-ro@host "reboot"          -> rejected server-side (ro-shell)
 
 - Non-interactive SSH has no TTY, so pagers/editors can't be abused.
 - All invocations are logged to syslog via `logger -t ro-shell`
-  (`grep ro-shell /var/log/messages` or midclt `system.logs`).
+  (`grep ro-shell /var/log/messages` or `midclt system.logs`).
 - The allowlist intentionally excludes `find`, `grep`, `awk`, `sed` (broad
   read/exec surface) and any command that can write.
 - `cat`/`journalctl`/`midclt` can still read sensitive data the OS lets the
