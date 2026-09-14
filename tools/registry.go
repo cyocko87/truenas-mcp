@@ -2444,6 +2444,26 @@ Returns task_id for tracking progress with tasks_get.
 		},
 		Handler: handleUpdateSystemConfig,
 	}
+
+	// Read-only shell/execute tool for gathering container/network/port data on TrueNAS.
+	// Requires TRUENAS_SSH_TARGET and TRUENAS_SSH_KEY environment variables to be set.
+	r.tools["run_readonly_command"] = Tool{
+		Definition: mcp.Tool{
+			Name:        "run_readonly_command",
+			Description: "Execute a read-only diagnostic command on the TrueNAS host over SSH. Commands are restricted to a strict allowlist (e.g., docker ps, ls, cat, zpool status). Pipes, redirects, chaining, substitution, globbing, and mutating commands are forbidden. Requires TRUENAS_SSH_TARGET and TRUENAS_SSH_KEY environment variables.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"command": map[string]interface{}{
+						"type":        "string",
+						"description": "The read-only command to execute (max 512 characters).",
+					},
+				},
+				"required": []string{"command"},
+			},
+		},
+		Handler: handleRunReadonlyCommand,
+	}
 }
 
 func (r *Registry) ListTools() []mcp.Tool {
