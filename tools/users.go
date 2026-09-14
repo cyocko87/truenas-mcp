@@ -336,33 +336,34 @@ func handleDeleteUser(client *truenas.Client, args map[string]interface{}) (stri
 	return string(formatted), nil
 }
 
-// resolveUserID finds the numeric user id from username or uid args.
+// resolveUserID finds the CRUD row id (not the unix uid) from username or uid args.
+// user.update/user.delete key on the database row id, which differs from uid.
 func resolveUserID(client *truenas.Client, args map[string]interface{}) (int64, error) {
+	filters := []interface{}{}
 	if uid, ok := args["uid"].(float64); ok && uid > 0 {
-		return int64(uid), nil
-	}
-	username, ok := args["username"].(string)
-	if !ok || username == "" {
+		filters = append(filters, []interface{}{"uid", "=", int64(uid)})
+	} else if username, ok := args["username"].(string); ok && username != "" {
+		filters = append(filters, []interface{}{"username", "=", username})
+	} else {
 		return 0, fmt.Errorf("username or uid is required")
 	}
-	filters := []interface{}{[]interface{}{"username", "=", username}}
 	options := map[string]interface{}{"get": true}
 	result, err := client.Call("user.query", filters, options)
 	if err != nil {
-		return 0, fmt.Errorf("failed to look up user %s: %w", username, err)
+		return 0, fmt.Errorf("failed to look up user: %w", err)
 	}
 	var user map[string]interface{}
 	if err := json.Unmarshal(result, &user); err != nil {
 		return 0, fmt.Errorf("failed to parse user lookup: %w", err)
 	}
 	if user == nil {
-		return 0, fmt.Errorf("user %s not found", username)
+		return 0, fmt.Errorf("user not found")
 	}
-	uid, ok := user["uid"].(float64)
+	id, ok := user["id"].(float64)
 	if !ok {
-		return 0, fmt.Errorf("user %s has no uid", username)
+		return 0, fmt.Errorf("user has no row id")
 	}
-	return int64(uid), nil
+	return int64(id), nil
 }
 
 // simplifyUser extracts the relevant non-secret fields from a raw user object.

@@ -217,32 +217,34 @@ func handleDeleteGroup(client *truenas.Client, args map[string]interface{}) (str
 	return string(formatted), nil
 }
 
+// resolveGroupID finds the CRUD row id (not the unix gid) from name or gid args.
+// group.update/group.delete key on the database row id, which differs from gid.
 func resolveGroupID(client *truenas.Client, args map[string]interface{}) (int64, error) {
+	filters := []interface{}{}
 	if gid, ok := args["gid"].(float64); ok && gid > 0 {
-		return int64(gid), nil
-	}
-	name, ok := args["name"].(string)
-	if !ok || name == "" {
+		filters = append(filters, []interface{}{"gid", "=", int64(gid)})
+	} else if name, ok := args["name"].(string); ok && name != "" {
+		filters = append(filters, []interface{}{"name", "=", name})
+	} else {
 		return 0, fmt.Errorf("name or gid is required")
 	}
-	filters := []interface{}{[]interface{}{"name", "=", name}}
 	options := map[string]interface{}{"get": true}
 	result, err := client.Call("group.query", filters, options)
 	if err != nil {
-		return 0, fmt.Errorf("failed to look up group %s: %w", name, err)
+		return 0, fmt.Errorf("failed to look up group: %w", err)
 	}
 	var group map[string]interface{}
 	if err := json.Unmarshal(result, &group); err != nil {
 		return 0, fmt.Errorf("failed to parse group lookup: %w", err)
 	}
 	if group == nil {
-		return 0, fmt.Errorf("group %s not found", name)
+		return 0, fmt.Errorf("group not found")
 	}
-	gid, ok := group["gid"].(float64)
+	id, ok := group["id"].(float64)
 	if !ok {
-		return 0, fmt.Errorf("group %s has no gid", name)
+		return 0, fmt.Errorf("group has no row id")
 	}
-	return int64(gid), nil
+	return int64(id), nil
 }
 
 func simplifyGroup(g map[string]interface{}) map[string]interface{} {
